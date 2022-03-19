@@ -21,7 +21,16 @@ import {
 } from "./data-types.ts";
 
 /** Represents a Model class, not an instance. */
-export type ModelSchema = typeof Model;
+export type ModelSchema<TModel extends Model = Model> = typeof Model;
+
+export type ModelConstructor<TModel extends Model = Model> =
+  & (new (
+    ...args: unknown[]
+  ) => unknown)
+  & {
+    prototype: TModel;
+  }
+  & ModelSchema;
 
 export type ModelFields = { [key: string]: FieldType };
 export type ModelDefaults = {
@@ -51,11 +60,15 @@ export type ModelEventType =
   | "deleting"
   | "deleted";
 
-export type ModelEventListenerWithModel = (model: Model) => void;
-export type ModelEventListenerWithoutModel = (model?: Model) => void;
-export type ModelEventListener =
-  | ModelEventListenerWithoutModel
-  | ModelEventListenerWithModel;
+export type ModelEventListenerWithModel<T extends Model = Model> = (
+  model: T,
+) => void;
+export type ModelEventListenerWithoutModel<T extends Model = Model> = (
+  model?: T,
+) => void;
+export type ModelEventListener<T extends Model = Model> =
+  | ModelEventListenerWithoutModel<T>
+  | ModelEventListenerWithModel<T>;
 
 export type ModelEventListeners = {
   [eventType in ModelEventType]?: ModelEventListener[];
@@ -218,7 +231,10 @@ export class Model {
   }
 
   /** Build the current query and run it on the associated database. */
-  private static async _runQuery(query: QueryDescription) {
+  private static async _runQuery<T extends ModelSchema>(
+    this: T,
+    query: QueryDescription,
+  ): Promise<T | T[]> {
     this._currentQuery = this._queryBuilder.queryForSchema(this);
 
     if (query.type) {
@@ -231,7 +247,7 @@ export class Model {
       this._runEventListeners(query.type, results);
     }
 
-    return results;
+    return results as unknown as T | T[];
   }
 
   /** Format a field or an object of fields, following a field matching table.
@@ -386,7 +402,7 @@ export class Model {
    *
    *     Flight.field("departure") => "flights.departure"
    *
-   *     Flight.field("id", "flight_id") => { flight_id: "flights.id" }
+   *     Flight.field("id", "flight_id") => { flight_id: "flights.id" }
    */
   static field(field: string): string;
   static field(field: string, nameAs: string): FieldAlias;
@@ -403,7 +419,7 @@ export class Model {
   }
 
   /** Run the current query. */
-  static get() {
+  static get<T extends ModelSchema>(this: T): Promise<T | T[]> {
     return this._runQuery(
       this._currentQuery.table(this.table).get().toDescription(),
     );
@@ -415,8 +431,8 @@ export class Model {
    *
    *     await Flight.select("id").all();
    */
-  static all() {
-    return this.get() as Promise<Model[]>;
+  static all<T extends ModelSchema>(this: T) {
+    return this.get();
   }
 
   /** Indicate which fields should be returned/selected from the query.
@@ -437,13 +453,22 @@ export class Model {
 
   /** Create one or multiple records in the current model.
    *
-   *     await Flight.create({ departure: "Paris", destination: "Tokyo" });
+   *     await Flight.create({ departure: "Paris", destination: "Tokyo" });
    *
-   *     await Flight.create([{ ... }, { ... }]);
+   *     await Flight.create([{ ... }, { ... }]);
    */
-  static async create(values: Values): Promise<Model>;
-  static async create(values: Values[]): Promise<Model[]>;
-  static async create(values: Values | Values[]) {
+  static async create<T extends ModelSchema>(
+    this: T,
+    values: Values,
+  ): Promise<T>;
+  static async create<T extends ModelSchema>(
+    this: T,
+    values: Values[],
+  ): Promise<T[]>;
+  static async create<T extends ModelSchema>(
+    this: T,
+    values: Values | Values[],
+  ) {
     const insertions = Array.isArray(values) ? values : [values];
 
     const results = await this._runQuery(
@@ -465,9 +490,18 @@ export class Model {
    *
    *     await Flight.find("1");
    */
-  static async find(idOrIds: FieldValue): Promise<Model>;
-  static async find(idOrIds: FieldValue[]): Promise<Model[]>;
-  static async find(idOrIds: FieldValue | FieldValue[]) {
+  static async find<T extends ModelSchema>(
+    this: T,
+    idOrIds: FieldValue,
+  ): Promise<T>;
+  static async find<T extends ModelSchema>(
+    this: T,
+    idOrIds: FieldValue[],
+  ): Promise<T[]>;
+  static async find<T extends ModelSchema>(
+    this: T,
+    idOrIds: FieldValue | FieldValue[],
+  ) {
     const results = await this._runQuery(
       this._currentQuery
         .table(this.table)
@@ -478,7 +512,7 @@ export class Model {
         .toDescription(),
     );
 
-    return Array.isArray(idOrIds) ? results : (results as Model[])[0];
+    return Array.isArray(idOrIds) ? results : (results as T[])[0];
   }
 
   /** Order query results based on a field name and an optional direction.
@@ -487,7 +521,7 @@ export class Model {
    *
    *     await Flight.orderBy("departure", "desc").all();
    *
-   *     await Flight.orderBy({ departure: "desc", destination: "asc" }).all();
+   *     await Flight.orderBy({ departure: "desc", destination: "asc" }).all();
    */
   static orderBy<T extends ModelSchema>(
     this: T,
@@ -545,10 +579,10 @@ export class Model {
    *
    *     await Flight.where("id", ">", "1").first();
    */
-  static async first() {
+  static async first<T extends ModelSchema>(this: T) {
     this.take(1);
     const results = await this.get();
-    return (results as Model[])[0];
+    return (results as T[])[0];
   }
 
   /** Skip n values in the results.
@@ -578,13 +612,12 @@ export class Model {
    *
    *     await Flight.where("id", ">", "1").get();
    *
-   *     await Flight.where({ id: "1", departure: "Paris" }).get();
+   *     await Flight.where({ id: "1", departure: "Paris" }).get();
    */
-  static where<T extends ModelSchema>(
-    this: T,
+  static where(
     field: string,
     fieldValue: FieldValue,
-  ): T;
+  );
   static where<T extends ModelSchema>(
     this: T,
     field: string,
@@ -597,7 +630,7 @@ export class Model {
     fieldOrFields: string | Values,
     operatorOrFieldValue?: Operator | FieldValue,
     fieldValue?: FieldValue,
-  ) {
+  ): T {
     if (typeof fieldOrFields === "string") {
       const whereOperator: Operator = typeof fieldValue !== "undefined"
         ? (operatorOrFieldValue as Operator)
@@ -642,7 +675,11 @@ export class Model {
    *
    *     await Flight.where("departure", "Dublin").update({ destination: "Tokyo" });
    */
-  static update(fieldOrFields: string | Values, fieldValue?: FieldValue) {
+  static update<T extends ModelSchema>(
+    this: T,
+    fieldOrFields: string | Values,
+    fieldValue?: FieldValue,
+  ) {
     let fieldsToUpdate: Values = {};
 
     if (this.timestamps) {
@@ -669,7 +706,7 @@ export class Model {
         .table(this.table)
         .update(fieldsToUpdate)
         .toDescription(),
-    ) as Promise<Model | Model[]>;
+    );
   }
 
   /** Delete a record by a primary key value.
@@ -785,7 +822,7 @@ export class Model {
         .toDescription(),
     );
 
-    return Number((value as AggregationResult[])[0].count);
+    return Number((value as unknown as AggregationResult[])[0].count);
   }
 
   /** Find the minimum value of a field from all the selected records.
@@ -800,7 +837,7 @@ export class Model {
         .toDescription(),
     );
 
-    return Number((value as AggregationResult[])[0].min);
+    return Number((value as unknown as AggregationResult[])[0].min);
   }
 
   /** Find the maximum value of a field from all the selected records.
@@ -815,14 +852,14 @@ export class Model {
         .toDescription(),
     );
 
-    return Number((value as AggregationResult[])[0].max);
+    return Number((value as unknown as AggregationResult[])[0].max);
   }
 
   /** Compute the sum of a field's values from all the selected records.
    *
    *     await Flight.sum("flightDuration");
    */
-  static async sum(field: string) {
+  static async sum(field: string): Promise<number> {
     const value = await this._runQuery(
       this._currentQuery
         .table(this.table)
@@ -830,7 +867,7 @@ export class Model {
         .toDescription(),
     );
 
-    return Number((value as AggregationResult[])[0].sum);
+    return Number((value as unknown as AggregationResult[])[0].sum);
   }
 
   /** Compute the average value of a field's values from all the selected records.
@@ -839,7 +876,7 @@ export class Model {
    *
    *     await Flight.where("destination", "San Francisco").avg("flightDuration");
    */
-  static async avg(field: string) {
+  static async avg(field: string): Promise<number> {
     const value = await this._runQuery(
       this._currentQuery
         .table(this.table)
@@ -847,7 +884,7 @@ export class Model {
         .toDescription(),
     );
 
-    return Number((value as AggregationResult[])[0].avg);
+    return Number((value as unknown as AggregationResult[])[0].avg);
   }
 
   /** Find associated values for the given model for one-to-many and many-to-many relationships.
@@ -861,9 +898,8 @@ export class Model {
    *     Airport.where("id", "1").flights();
    */
   static hasMany<T extends ModelSchema>(
-    this: T,
-    model: ModelSchema,
-  ): Promise<Model | Model[]> {
+    model: T,
+  ): Promise<T | T[]> {
     const currentWhereValue = this._findCurrentQueryWhereClause();
 
     if (model.name in this.pivot) {
@@ -883,7 +919,7 @@ export class Model {
           pivotOtherModel.field(pivotOtherModel.getComputedPrimaryKey()),
           pivot.field(pivotOtherModelField),
         )
-        .get();
+        .get() as unknown as Promise<T | T[]>;
     }
 
     const foreignKeyName = this._findModelForeignKeyField(model);
@@ -892,18 +928,21 @@ export class Model {
   }
 
   /** Find associated values for the given model for one-to-one and one-to-many relationships. */
-  static async hasOne<T extends ModelSchema>(this: T, model: ModelSchema) {
+  static async hasOne<TModel extends ModelSchema, TRelationship extends Model>(
+    this: TModel,
+    model: ModelConstructor<TRelationship>,
+  ): Promise<TRelationship> {
     const currentWhereValue = this._findCurrentQueryWhereClause();
     const FKName = this._findModelForeignKeyField(model);
 
-    if (!FKName) {
-      const currentModelFKName = this._findModelForeignKeyField(this, model);
+    if (!FKName || typeof FKName !== "string") {
+      const currentModelFKName = this._findModelForeignKeyField(model);
       const currentModelValue = await this.where(
         this.getComputedPrimaryKey(),
         currentWhereValue,
       ).first();
       const currentModelFKValue =
-        currentModelValue[currentModelFKName] as FieldValue;
+        currentModelValue[currentModelFKName] as unknown as FieldValue;
       return model.where(model.getComputedPrimaryKey(), currentModelFKValue)
         .first();
     }
@@ -931,8 +970,9 @@ export class Model {
   }
 
   /** Look for a `fieldName: Relationships.belongsTo(forModel)` field for a given `model`. */
-  private static _findModelForeignKeyField(
-    model: ModelSchema,
+  private static _findModelForeignKeyField<T extends Model>(
+    this: ModelSchema,
+    model: ModelConstructor<T>,
     forModel: ModelSchema = this,
   ): string {
     const modelFK: [string, FieldType] | undefined = Object.entries(
@@ -963,8 +1003,8 @@ export class Model {
    *     flight.destination = "Paris";
    *     await flight.save();
    */
-  async save() {
-    const model = this.constructor as ModelSchema;
+  async save<T extends ModelSchema>(this: T): Promise<T> {
+    const model: T = this.constructor as T;
     const values: Values = {};
 
     for (const field of Object.keys(model.fields)) {
